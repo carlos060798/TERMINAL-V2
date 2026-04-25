@@ -1,50 +1,54 @@
 """
-Quantum Investment Terminal — Main Entry Point
+Quantum Investment Terminal - Main entry point.
 
-Bloomberg-like investment analysis platform with Graham-Dodd methodology.
-
-Phase 3+: Replace this with PyQt6 QApplication initialization.
+Run this file to launch the PyQt6 application.
 """
 
 import sys
+import logging
+from pathlib import Path
 
-from quantum_terminal.config import settings
+from PyQt6.QtWidgets import QApplication
+from PyQt6.QtCore import Qt
+
+# Add project root to path
+project_root = Path(__file__).parent
+sys.path.insert(0, str(project_root))
+
+from quantum_terminal.ui.main_window import QuantumTerminal
+from quantum_terminal.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
-def main() -> None:
-    """Main application entry point."""
-    print("=" * 70)
-    print("QUANTUM INVESTMENT TERMINAL")
-    print("=" * 70)
-    print()
-    print("📊 Investment Analysis Platform")
-    print("📈 Graham-Dodd Methodology")
-    print("🤖 Multi-LLM AI Analysis")
-    print()
-    print("Current Phase: Foundation (Phase 1)")
-    print()
-    print("Next Steps:")
-    print("  1. Install dependencies: uv sync")
-    print("  2. Configure .env with your API keys")
-    print("  3. Run: python scripts/project_orchestrator.py --status")
-    print("  4. Run: python scripts/phase_generator.py --phase 1")
-    print("  5. Run: pytest domain/ -v")
-    print()
-    print("Project Root:", settings.project_root)
-    print("Database Path:", settings.database_path)
-    print()
+def main() -> int:
+    """Main entry point for the application."""
+    try:
+        # Create application
+        app = QApplication(sys.argv)
 
-    # API Key status
-    api_status = settings.validate_api_keys()
-    configured = sum(1 for v in api_status.values() if v)
-    total = len(api_status)
+        # Set application name and version
+        app.setApplicationName("Quantum Investment Terminal")
+        app.setApplicationVersion("1.0.0")
 
-    print(f"🔑 API Keys: {configured}/{total} configured")
-    if configured < total:
-        print("   Run: cp .env.template .env  (then add your keys)")
-    print()
-    print("=" * 70)
+        # Set application style
+        app.setStyle("Fusion")
+
+        logger.info("Starting Quantum Investment Terminal")
+
+        # Create and show main window
+        window = QuantumTerminal()
+        window.show()
+
+        logger.info("Window displayed, entering event loop")
+
+        # Run event loop
+        return app.exec()
+
+    except Exception as e:
+        logger.error(f"Fatal error: {e}", exc_info=True)
+        return 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
