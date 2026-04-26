@@ -1,19 +1,29 @@
 """
-Tests for AnalyzerPanel.
+Test suite for AnalyzerPanel - Graham-Dodd analysis UI component.
 
-Test suite for the Analyzer panel UI component.
-Verifies company loading, analysis execution, and tab updates.
+Tests verify:
+1. Panel initialization and tab creation (7 Graham tabs)
+2. Data loading and display updates
+3. Graham formula integration with domain layer
+4. Quality score calculation
+5. Manipulation detection (5 red flags)
+6. Peer comparison and summary generation
+7. Valuation calculations (Graham IV, NNWC, Liquidation)
+8. Thread safety and error handling
 
-Phase 3 - UI Testing
-Reference: PLAN_MAESTRO.md - Phase 3: UI Skeleton
+Phase 3 - UI Layer Testing
+Reference: CLAUDE.md - AnalyzerPanel with 7 Graham tabs
 """
 
 import pytest
 from unittest.mock import Mock, patch, MagicMock
 from PyQt6.QtWidgets import QApplication
-from PyQt6.QtTest import QSignalSpy
 
-from quantum_terminal.ui.panels import AnalyzerPanel
+from quantum_terminal.ui.panels.analyzer_panel import AnalyzerPanel
+from quantum_terminal.domain.valuation import (
+    graham_formula, nnwc, liquidation_value, adjusted_pe_ratio
+)
+from quantum_terminal.domain.risk import quality_score, detect_manipulation
 
 
 @pytest.fixture
@@ -32,11 +42,13 @@ def analyzer(app):
 
 
 class TestAnalyzerPanelInitialization:
-    """Test AnalyzerPanel initialization."""
+    """Test AnalyzerPanel initialization and structure."""
 
     def test_panel_creates_without_error(self, analyzer):
         """Test that panel initializes without error."""
         assert analyzer is not None
+        assert analyzer.current_ticker is None
+        assert analyzer.company_data == {}
 
     def test_panel_has_ticker_input(self, analyzer):
         """Test that ticker input widget is created."""
@@ -44,9 +56,57 @@ class TestAnalyzerPanelInitialization:
         assert analyzer.ticker_input is not None
 
     def test_panel_has_seven_tabs(self, analyzer):
-        """Test that all 7 analysis tabs are created."""
+        """Test that all 7 Graham-Dodd analysis tabs are created."""
         assert hasattr(analyzer, 'tabs')
         assert analyzer.tabs.count() == 7
+
+    def test_tab_names_correct(self, analyzer):
+        """Test that tabs have correct names."""
+        expected_tabs = [
+            "Screening",
+            "Income Statement",
+            "Margins",
+            "Balance Sheet",
+            "Historical",
+            "Comparables",
+            "Valuation",
+        ]
+        for i, expected_name in enumerate(expected_tabs):
+            assert analyzer.tabs.tabText(i) == expected_name
+
+    def test_screening_semaphores_count(self, analyzer):
+        """Test that 10 quality semaphores are created."""
+        assert len(analyzer.semaphores) == 10
+
+    def test_screening_semaphore_factors(self, analyzer):
+        """Test that all Graham quality factors exist."""
+        expected_factors = [
+            "Current Ratio",
+            "Quick Ratio",
+            "D/E Ratio",
+            "OCF/NI",
+            "ROE",
+            "ROIC",
+            "EPS Growth",
+            "Debt/EBITDA",
+            "Interest Coverage",
+            "D&A/CapEx",
+        ]
+        for factor in expected_factors:
+            assert factor in analyzer.semaphores
+
+    def test_sidebar_widgets_exist(self, analyzer):
+        """Test that sidebar contains chart, thesis, and chat."""
+        assert analyzer.tradingview_chart is not None
+        assert analyzer.generate_thesis_btn is not None
+        assert analyzer.thesis_display is not None
+        assert analyzer.ai_chat is not None
+
+    def test_signals_defined(self, analyzer):
+        """Test that panel signals are properly defined."""
+        assert analyzer.company_loaded is not None
+        assert analyzer.analysis_complete is not None
+        assert analyzer.ai_thesis_generated is not None
 
     def test_tab_names(self, analyzer):
         """Test that tab names are correct."""
@@ -414,6 +474,227 @@ class TestErrorHandling:
                          side_effect=Exception("Test error")):
             # Should not raise exception
             analyzer._on_generate_thesis()
+
+
+class TestGrahamValuation:
+    """Test Graham formula calculations."""
+
+    def test_graham_valuation_basic(self, analyzer):
+        """Test basic Graham IV calculation."""
+        fundamentals = {
+            "eps": 5.0,
+            "growth_rate": 8.0,
+            "risk_free_rate": 4.5,
+            "current_ratio": 2.0,
+            "ocf_ni": 1.0,
+            "debt_to_equity": 0.3,
+            "dividend_coverage": 2.5,
+            "margin_stability": 0.05,
+            "roe": 0.20,
+            "tax_rate": 0.25,
+            "asset_turnover": 1.2,
+            "valuation_gap": -0.05,
+            "current_price": 100,
+            "current_assets": 500,
+            "total_liabilities": 300,
+            "inventory": 100,
+            "fixed_assets": 200,
+            "shares_outstanding": 1000,
+        }
+
+        result = analyzer._calculate_graham_valuation(fundamentals)
+
+        assert result is not None
+        assert "graham_iv" in result
+        assert "quality_score" in result
+        assert "margin_of_safety" in result
+        assert "decision" in result
+        assert result["graham_iv"] > 0
+        assert 0 <= result["quality_score"] <= 100
+
+    def test_graham_decision_buy(self, analyzer):
+        """Verify BUY decision when price << IV."""
+        fundamentals = {
+            "eps": 5.0,
+            "growth_rate": 10.0,
+            "risk_free_rate": 3.0,
+            "current_ratio": 2.0,
+            "ocf_ni": 1.0,
+            "debt_to_equity": 0.3,
+            "dividend_coverage": 2.5,
+            "margin_stability": 0.05,
+            "roe": 0.20,
+            "tax_rate": 0.25,
+            "asset_turnover": 1.2,
+            "valuation_gap": -0.2,
+            "current_price": 50,
+            "current_assets": 500,
+            "total_liabilities": 300,
+            "inventory": 100,
+            "fixed_assets": 200,
+            "shares_outstanding": 1000,
+        }
+
+        result = analyzer._calculate_graham_valuation(fundamentals)
+        assert result["decision"] == "BUY"
+
+    def test_graham_decision_avoid(self, analyzer):
+        """Verify AVOID decision when price > IV."""
+        fundamentals = {
+            "eps": 2.0,
+            "growth_rate": 3.0,
+            "risk_free_rate": 5.0,
+            "current_ratio": 1.5,
+            "ocf_ni": 0.9,
+            "debt_to_equity": 0.8,
+            "dividend_coverage": 1.5,
+            "margin_stability": 0.10,
+            "roe": 0.08,
+            "tax_rate": 0.25,
+            "asset_turnover": 0.8,
+            "valuation_gap": 0.5,
+            "current_price": 500,
+            "current_assets": 300,
+            "total_liabilities": 300,
+            "inventory": 80,
+            "fixed_assets": 100,
+            "shares_outstanding": 1000,
+        }
+
+        result = analyzer._calculate_graham_valuation(fundamentals)
+        assert result["decision"] == "AVOID"
+
+    def test_nnwc_calculation(self, analyzer):
+        """Verify NNWC per-share calculation."""
+        fundamentals = {
+            "eps": 5.0,
+            "growth_rate": 8.0,
+            "risk_free_rate": 4.5,
+            "current_ratio": 2.0,
+            "ocf_ni": 1.0,
+            "debt_to_equity": 0.3,
+            "dividend_coverage": 2.5,
+            "margin_stability": 0.05,
+            "roe": 0.20,
+            "tax_rate": 0.25,
+            "asset_turnover": 1.2,
+            "valuation_gap": -0.05,
+            "current_price": 100,
+            "current_assets": 1000,
+            "total_liabilities": 600,
+            "inventory": 200,
+            "fixed_assets": 400,
+            "shares_outstanding": 100,
+        }
+
+        result = analyzer._calculate_graham_valuation(fundamentals)
+        # NNWC = CA - TL = 1000 - 600 = 400; per share = 400/100 = 4.0
+        assert result["nnwc_per_share"] == 4.0
+
+    def test_quality_score_integration(self, analyzer):
+        """Verify quality score affects Graham IV."""
+        fundamentals = {
+            "eps": 5.0,
+            "growth_rate": 8.0,
+            "risk_free_rate": 4.5,
+            "current_ratio": 1.0,
+            "ocf_ni": 0.5,
+            "debt_to_equity": 2.0,
+            "dividend_coverage": 0.8,
+            "margin_stability": 0.20,
+            "roe": 0.02,
+            "tax_rate": 0.50,
+            "asset_turnover": 0.3,
+            "valuation_gap": 0.3,
+            "current_price": 100,
+            "current_assets": 100,
+            "total_liabilities": 200,
+            "inventory": 20,
+            "fixed_assets": 50,
+            "shares_outstanding": 10,
+        }
+
+        result = analyzer._calculate_graham_valuation(fundamentals)
+        quality = result["quality_score"]
+        assert quality < 50  # Poor fundamentals
+
+
+class TestManipulationDetection:
+    """Test Graham red flag detection."""
+
+    def test_detect_manipulation_ocf_ni(self, analyzer):
+        """Verify OCF < NI flag detection."""
+        financials = {
+            "ocf": 400,
+            "net_income": 900,
+            "depreciation": 300,
+            "capex": 150,
+            "equity_delta": 300,
+            "ni_less_dividends": 650,
+        }
+
+        flags = analyzer._detect_manipulation_flags(financials)
+        ocf_flag = next((f for f in flags if f[0] == "ocf_below_ni"), None)
+        assert ocf_flag is not None
+        assert ocf_flag[1] is True
+
+    def test_detect_manipulation_da_exceeds_capex(self, analyzer):
+        """Verify D&A > CapEx flag detection."""
+        financials = {
+            "ocf": 1000,
+            "net_income": 900,
+            "depreciation": 300,
+            "capex": 150,
+            "equity_delta": 650,
+            "ni_less_dividends": 650,
+        }
+
+        flags = analyzer._detect_manipulation_flags(financials)
+        da_flag = next((f for f in flags if f[0] == "da_exceeds_capex"), None)
+        assert da_flag is not None
+        assert da_flag[1] is True
+
+    def test_detect_manipulation_healthy_company(self, analyzer):
+        """Verify no major flags for healthy company."""
+        financials = {
+            "ocf": 1000,
+            "net_income": 900,
+            "depreciation": 200,
+            "capex": 250,
+            "equity_delta": 650,
+            "ni_less_dividends": 650,
+        }
+
+        flags = analyzer._detect_manipulation_flags(financials)
+        assert len(flags) == 5
+        # ocf_below_ni should be False
+        assert not flags[0][1]
+
+
+class TestPeerComparison:
+    """Test peer comparison."""
+
+    def test_peer_summary_cheaper(self, analyzer):
+        """Verify summary when company is cheaper."""
+        peers = [
+            {"name": "Company", "pe": "15.0"},
+            {"name": "Peer1", "pe": "20.0"},
+            {"name": "Peer2", "pe": "22.0"},
+        ]
+
+        summary = analyzer._generate_peer_summary(peers)
+        assert "CHEAPER" in summary or "cheaper" in summary
+
+    def test_peer_summary_expensive(self, analyzer):
+        """Verify summary when company is more expensive."""
+        peers = [
+            {"name": "Company", "pe": "35.0"},
+            {"name": "Peer1", "pe": "20.0"},
+            {"name": "Peer2", "pe": "22.0"},
+        ]
+
+        summary = analyzer._generate_peer_summary(peers)
+        assert "PRICIER" in summary or "pricier" in summary
 
 
 class TestUIIntegration:

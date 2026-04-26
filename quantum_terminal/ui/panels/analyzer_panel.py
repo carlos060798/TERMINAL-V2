@@ -22,18 +22,23 @@ Reference: PLAN_MAESTRO.md - Phase 3: UI Skeleton
 from typing import Optional, Dict, List, Tuple
 from decimal import Decimal
 import logging
+import asyncio
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTabWidget, QTableWidget,
     QTableWidgetItem, QLabel, QHeaderView, QScrollArea, QSplitter,
     QPushButton, QTextEdit, QLineEdit, QComboBox
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QSize
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QSize, QThread, pyqtSlot
 from PyQt6.QtGui import QFont, QColor, QPixmap, QBrush
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 
 from quantum_terminal.ui.widgets import ChartWidget, AIChatWidget
 from quantum_terminal.utils.logger import get_logger
+from quantum_terminal.domain.valuation import (
+    graham_formula, nnwc, liquidation_value, adjusted_pe_ratio
+)
+from quantum_terminal.domain.risk import quality_score, detect_manipulation
 
 logger = get_logger(__name__)
 
@@ -650,8 +655,25 @@ class AnalyzerPanel(QWidget):
 
     def _update_margins_tab(self):
         """Update margins analysis."""
-        # TODO: Implement margin chart and table population
-        pass
+        data = self.company_data
+        margins_history = data.get("margins_history", [])
+
+        self.margin_table.setRowCount(len(margins_history))
+        for row, year_data in enumerate(margins_history):
+            self.margin_table.setItem(row, 0, QTableWidgetItem(str(year_data.get("year", ""))))
+            self.margin_table.setItem(row, 1, QTableWidgetItem(f"{year_data.get('gross_margin', 0):.1f}%"))
+            self.margin_table.setItem(row, 2, QTableWidgetItem(f"{year_data.get('operating_margin', 0):.1f}%"))
+            self.margin_table.setItem(row, 3, QTableWidgetItem(f"{year_data.get('net_margin', 0):.1f}%"))
+
+            vs_sector = year_data.get("vs_sector", 0)
+            vs_color = "#00cc00" if vs_sector > 0 else "#ff3333" if vs_sector < 0 else "#999999"
+            vs_item = QTableWidgetItem(f"{vs_sector:+.1f}%")
+            vs_item.setForeground(QBrush(QColor(vs_color)))
+            self.margin_table.setItem(row, 4, vs_item)
+
+            change = year_data.get("change", 0)
+            arrow = "↑" if change > 0 else "↓" if change < 0 else "→"
+            self.margin_table.setItem(row, 5, QTableWidgetItem(f"{arrow} {abs(change):.1f}%"))
 
     def _update_balance_sheet_tab(self):
         """Update balance sheet analysis."""
@@ -660,6 +682,14 @@ class AnalyzerPanel(QWidget):
         # NNWC values
         self.nnwc_value.setText(data.get("nnwc_value", "$0.00"))
         self.nnwc_per_share.setText(data.get("nnwc_per_share", "$0.00"))
+
+        # NNWC breakdown
+        nnwc_items = data.get("nnwc_breakdown", [])
+        self.nnwc_table.setRowCount(len(nnwc_items))
+        for row, item in enumerate(nnwc_items):
+            self.nnwc_table.setItem(row, 0, QTableWidgetItem(item.get("item", "")))
+            self.nnwc_table.setItem(row, 1, QTableWidgetItem(item.get("value", "")))
+            self.nnwc_table.setItem(row, 2, QTableWidgetItem(item.get("notes", "")))
 
         # Debt schedule
         debt_schedule = data.get("debt_schedule", [])
@@ -670,24 +700,136 @@ class AnalyzerPanel(QWidget):
             self.debt_table.setItem(row, 2, QTableWidgetItem(str(debt_item.get("rate", ""))))
             self.debt_table.setItem(row, 3, QTableWidgetItem(str(debt_item.get("status", ""))))
 
+        # Liquidity ratios
+        liquidity_metrics = data.get("liquidity_metrics", [])
+        self.liquidity_table.setRowCount(len(liquidity_metrics))
+        for row, metric in enumerate(liquidity_metrics):
+            self.liquidity_table.setItem(row, 0, QTableWidgetItem(metric.get("metric", "")))
+            self.liquidity_table.setItem(row, 1, QTableWidgetItem(str(metric.get("current", ""))))
+            self.liquidity_table.setItem(row, 2, QTableWidgetItem(str(metric.get("industry_avg", ""))))
+            self.liquidity_table.setItem(row, 3, QTableWidgetItem(str(metric.get("benchmark", ""))))
+
+            status = metric.get("status", "NEUTRAL")
+            status_color = "#00cc00" if status == "PASS" else "#ff3333" if status == "FAIL" else "#ffaa00"
+            status_item = QTableWidgetItem(status)
+            status_item.setForeground(QBrush(QColor(status_color)))
+            self.liquidity_table.setItem(row, 4, status_item)
+
     def _update_historical_tab(self):
         """Update historical analysis."""
-        # TODO: Implement recession, management, and returns tables
-        pass
+        data = self.company_data
+
+        # Recession performance
+        recessions = data.get("recession_performance", [])
+        self.recession_table.setRowCount(len(recessions))
+        for row, rec in enumerate(recessions):
+            self.recession_table.setItem(row, 0, QTableWidgetItem(rec.get("period", "")))
+            self.recession_table.setItem(row, 1, QTableWidgetItem(rec.get("start", "")))
+            self.recession_table.setItem(row, 2, QTableWidgetItem(rec.get("trough", "")))
+            self.recession_table.setItem(row, 3, QTableWidgetItem(rec.get("recovery", "")))
+
+            outperform = rec.get("outperform", False)
+            outperform_color = "#00cc00" if outperform else "#ff3333"
+            outperform_item = QTableWidgetItem("YES" if outperform else "NO")
+            outperform_item.setForeground(QBrush(QColor(outperform_color)))
+            self.recession_table.setItem(row, 4, outperform_item)
+
+        # Management changes
+        mgmt_events = data.get("management_events", [])
+        self.mgmt_table.setRowCount(len(mgmt_events))
+        for row, event in enumerate(mgmt_events):
+            self.mgmt_table.setItem(row, 0, QTableWidgetItem(event.get("date", "")))
+            self.mgmt_table.setItem(row, 1, QTableWidgetItem(event.get("event", "")))
+            self.mgmt_table.setItem(row, 2, QTableWidgetItem(event.get("position", "")))
+            self.mgmt_table.setItem(row, 3, QTableWidgetItem(event.get("notes", "")))
+
+        # Return metrics
+        returns = data.get("return_metrics", [])
+        self.returns_table.setRowCount(len(returns))
+        for row, ret in enumerate(returns):
+            self.returns_table.setItem(row, 0, QTableWidgetItem(str(ret.get("year", ""))))
+            self.returns_table.setItem(row, 1, QTableWidgetItem(f"{ret.get('roe', 0):.1f}%"))
+            self.returns_table.setItem(row, 2, QTableWidgetItem(f"{ret.get('roa', 0):.1f}%"))
+            self.returns_table.setItem(row, 3, QTableWidgetItem(f"{ret.get('roic', 0):.1f}%"))
+            self.returns_table.setItem(row, 4, QTableWidgetItem(f"{ret.get('wacc', 0):.1f}%"))
+
+            spread = ret.get("roic", 0) - ret.get("wacc", 0)
+            spread_color = "#00cc00" if spread > 0 else "#ff3333"
+            spread_item = QTableWidgetItem(f"{spread:+.1f}%")
+            spread_item.setForeground(QBrush(QColor(spread_color)))
+            self.returns_table.setItem(row, 5, spread_item)
 
     def _update_comparables_tab(self):
         """Update peer comparison."""
         peers = self.company_data.get("peers", [])
         self.peers_table.setRowCount(len(peers))
+
+        # Calculate peer averages for comparison
+        if peers:
+            pe_values = [float(p.get("pe", "0")) for p in peers]
+            pe_avg = sum(pe_values) / len(pe_values) if pe_values else 0
+
         for row, peer in enumerate(peers):
-            self.peers_table.setItem(row, 0, QTableWidgetItem(peer.get("name", "")))
-            self.peers_table.setItem(row, 1, QTableWidgetItem(str(peer.get("pe", ""))))
+            ticker_item = QTableWidgetItem(peer.get("name", ""))
+            self.peers_table.setItem(row, 0, ticker_item)
+
+            # P/E with color coding
+            pe = float(peer.get("pe", "0"))
+            pe_item = QTableWidgetItem(str(peer.get("pe", "")))
+            pe_color = "#00cc00" if pe < pe_avg else "#ff3333" if pe > pe_avg else "#ffaa00"
+            pe_item.setForeground(QBrush(QColor(pe_color)))
+            self.peers_table.setItem(row, 1, pe_item)
+
             self.peers_table.setItem(row, 2, QTableWidgetItem(str(peer.get("pb", ""))))
-            self.peers_table.setItem(row, 3, QTableWidgetItem(str(peer.get("roe", ""))))
+
+            # ROE with color
+            roe = str(peer.get("roe", "")).rstrip("%")
+            roe_item = QTableWidgetItem(peer.get("roe", ""))
+            roe_color = "#00cc00" if float(roe) > 15 else "#ffaa00" if float(roe) > 10 else "#ff3333"
+            roe_item.setForeground(QBrush(QColor(roe_color)))
+            self.peers_table.setItem(row, 3, roe_item)
+
             self.peers_table.setItem(row, 4, QTableWidgetItem(str(peer.get("de", ""))))
             self.peers_table.setItem(row, 5, QTableWidgetItem(str(peer.get("div_yield", ""))))
             self.peers_table.setItem(row, 6, QTableWidgetItem(str(peer.get("eps_growth", ""))))
-            self.peers_table.setItem(row, 7, QTableWidgetItem(peer.get("rating", "")))
+
+            rating = peer.get("rating", "")
+            rating_item = QTableWidgetItem(rating)
+            rating_color = "#00cc00" if rating == "BUY" else "#ffaa00" if rating == "HOLD" else "#ff3333"
+            rating_item.setForeground(QBrush(QColor(rating_color)))
+            self.peers_table.setItem(row, 7, rating_item)
+
+        # Update summary text
+        if peers:
+            summary_text = self._generate_peer_summary(peers)
+            self.peer_summary.setText(summary_text)
+
+    def _generate_peer_summary(self, peers: List[Dict]) -> str:
+        """Generate summary commentary comparing company to peers."""
+        if not peers:
+            return "No peer data available."
+
+        pe_values = [float(p.get("pe", "0")) for p in peers]
+        avg_pe = sum(pe_values) / len(pe_values)
+        company_pe = pe_values[0] if pe_values else 0
+
+        summary = f"Peer Analysis:\n"
+        summary += f"Avg P/E: {avg_pe:.1f}x\n"
+
+        if company_pe < avg_pe * 0.9:
+            summary += f"✓ CHEAPER than peers (by {((avg_pe - company_pe) / avg_pe * 100):.1f}%)\n"
+            summary += "Potential value opportunity."
+        elif company_pe > avg_pe * 1.1:
+            summary += f"✗ PRICIER than peers (by {((company_pe - avg_pe) / avg_pe * 100):.1f}%)\n"
+            summary += "May be overvalued relative to peers."
+        else:
+            summary += "≈ FAIRLY PRICED vs peers"
+
+        # Count BUY ratings
+        buy_count = sum(1 for p in peers if p.get("rating") == "BUY")
+        summary += f"\n\nBUY Ratings: {buy_count}/{len(peers)} peers"
+
+        return summary
 
     def _update_valuation_tab(self):
         """Update valuation analysis."""
@@ -697,7 +839,12 @@ class AnalyzerPanel(QWidget):
         self.graham_iv.setText(data.get("graham_iv", "$0.00"))
         self.current_price_disp.setText(data.get("current_price", "$0.00"))
         self.mos_display.setText(data.get("margin_of_safety", "0.00%"))
-        self.decision_display.setText(data.get("decision", "HOLD"))
+
+        # Decision color coding
+        decision = data.get("decision", "HOLD")
+        decision_color = "#00cc00" if decision == "BUY" else "#ffaa00" if decision == "HOLD" else "#ff3333"
+        self.decision_display.setStyleSheet(f"font-weight: bold; font-size: 14px; color: {decision_color};")
+        self.decision_display.setText(decision)
 
         # Graham table
         graham_components = data.get("graham_components", {})
@@ -705,6 +852,120 @@ class AnalyzerPanel(QWidget):
         for row, (metric, value) in enumerate(graham_components.items()):
             self.graham_table.setItem(row, 0, QTableWidgetItem(metric))
             self.graham_table.setItem(row, 1, QTableWidgetItem(str(value)))
+
+        # Alternative valuation methods
+        alt_methods = data.get("alternative_valuations", [])
+        self.alt_valuation_table.setRowCount(len(alt_methods))
+        for row, method in enumerate(alt_methods):
+            self.alt_valuation_table.setItem(row, 0, QTableWidgetItem(method.get("method", "")))
+            self.alt_valuation_table.setItem(row, 1, QTableWidgetItem(method.get("iv", "")))
+
+            mos = float(method.get("mos", "0").rstrip("%")) if method.get("mos") else 0
+            mos_color = "#00cc00" if mos > 0 else "#ff3333"
+            mos_item = QTableWidgetItem(method.get("mos", "0%"))
+            mos_item.setForeground(QBrush(QColor(mos_color)))
+            self.alt_valuation_table.setItem(row, 2, mos_item)
+
+            self.alt_valuation_table.setItem(row, 3, QTableWidgetItem(method.get("notes", "")))
+
+    def _calculate_graham_valuation(self, fundamentals: Dict) -> Dict:
+        """
+        Calculate Graham-Dodd intrinsic value with quality adjustment.
+
+        Args:
+            fundamentals: Dict with eps, growth_rate, risk_free_rate, etc.
+
+        Returns:
+            Dict with IV, margin of safety, decision
+        """
+        try:
+            eps = fundamentals.get("eps", 0)
+            growth = fundamentals.get("growth_rate", 8.0)
+            rf_rate = fundamentals.get("risk_free_rate", 4.5)
+
+            # Calculate quality score (0-100)
+            q_score = quality_score(
+                current_ratio=fundamentals.get("current_ratio", 1.5),
+                ocf_to_ni=fundamentals.get("ocf_ni", 1.0),
+                debt_to_equity=fundamentals.get("debt_to_equity", 0.5),
+                dividend_coverage=fundamentals.get("dividend_coverage", 2.0),
+                earnings_growth=growth / 100.0,
+                margin_stability=fundamentals.get("margin_stability", 0.08),
+                roe=fundamentals.get("roe", 0.15) / 100.0,
+                tax_burden=fundamentals.get("tax_rate", 0.25),
+                asset_turnover=fundamentals.get("asset_turnover", 1.0),
+                valuation_gap=fundamentals.get("valuation_gap", -0.1),
+            )
+
+            # Calculate Graham IV
+            iv = graham_formula(eps=eps, growth_rate=growth, risk_free_rate=rf_rate, quality_score=q_score)
+
+            # Calculate alternative valuations
+            current_assets = fundamentals.get("current_assets", 0)
+            total_liabilities = fundamentals.get("total_liabilities", 0)
+            inventory = fundamentals.get("inventory", 0)
+            fixed_assets = fundamentals.get("fixed_assets", 0)
+            shares_outstanding = fundamentals.get("shares_outstanding", 1)
+
+            nnwc_value = nnwc(current_assets, total_liabilities)
+            nnwc_per_share = nnwc_value / shares_outstanding if shares_outstanding > 0 else 0
+
+            liq_value = liquidation_value(
+                current_assets=current_assets,
+                inventory=inventory,
+                fixed_assets=fixed_assets,
+                total_liabilities=total_liabilities,
+            )
+            liq_per_share = liq_value / shares_outstanding if shares_outstanding > 0 else 0
+
+            current_price = fundamentals.get("current_price", iv * 0.9)
+            mos = ((iv - current_price) / iv * 100) if iv > 0 else 0
+
+            # Decision logic
+            if current_price < iv * 0.70:
+                decision = "BUY"
+            elif current_price < iv:
+                decision = "HOLD"
+            else:
+                decision = "AVOID"
+
+            return {
+                "graham_iv": iv,
+                "nnwc_per_share": nnwc_per_share,
+                "liquidation_per_share": liq_per_share,
+                "current_price": current_price,
+                "margin_of_safety": mos,
+                "quality_score": q_score,
+                "decision": decision,
+            }
+
+        except Exception as e:
+            logger.error(f"Graham valuation calculation failed: {e}", exc_info=True)
+            return {}
+
+    def _detect_manipulation_flags(self, financials: Dict) -> List[Tuple[str, bool]]:
+        """
+        Detect Graham-Dodd red flags from financial statements.
+
+        Args:
+            financials: Financial metrics dict
+
+        Returns:
+            List of (flag_name, is_flagged) tuples
+        """
+        try:
+            flags = detect_manipulation(
+                ocf=financials.get("ocf", 0),
+                net_income=financials.get("net_income", 0),
+                depreciation=financials.get("depreciation", 0),
+                capex=financials.get("capex", 0),
+                equity_delta=financials.get("equity_delta", 0),
+                ni_less_dividends=financials.get("ni_less_dividends", 0),
+            )
+            return [(k, v) for k, v in flags.items()]
+        except Exception as e:
+            logger.error(f"Manipulation detection failed: {e}", exc_info=True)
+            return []
 
     def _on_ticker_entered(self):
         """Handle ticker input enter key."""
@@ -768,22 +1029,62 @@ class AnalyzerPanel(QWidget):
             "income_history": [
                 {"year": 2023, "revenue": "383.3B", "ebitda": "122.2B", "eps": "6.05", "ocf": "121.1B", "ocf_ni": 1.02, "da_capex": 0.65},
                 {"year": 2022, "revenue": "394.3B", "ebitda": "123.5B", "eps": "5.61", "ocf": "122.2B", "ocf_ni": 1.03, "da_capex": 0.64},
+                {"year": 2021, "revenue": "365.8B", "ebitda": "119.4B", "eps": "5.29", "ocf": "110.5B", "ocf_ni": 1.04, "da_capex": 0.63},
+            ],
+            "margins_history": [
+                {"year": 2023, "gross_margin": 46.2, "operating_margin": 32.0, "net_margin": 25.3, "vs_sector": 3.5, "change": 0.8},
+                {"year": 2022, "gross_margin": 45.8, "operating_margin": 31.2, "net_margin": 24.7, "vs_sector": 2.8, "change": -0.3},
+                {"year": 2021, "gross_margin": 46.0, "operating_margin": 31.5, "net_margin": 25.0, "vs_sector": 3.2, "change": 0.5},
             ],
             "debt_schedule": [
                 {"year": 2024, "amount": "$25B", "rate": "3.2%", "status": "Active"},
                 {"year": 2025, "amount": "$35B", "rate": "3.5%", "status": "Active"},
+                {"year": 2027, "amount": "$15B", "rate": "2.8%", "status": "Active"},
+            ],
+            "nnwc_breakdown": [
+                {"item": "Current Assets", "value": "$62.2B", "notes": "Cash, AR, Inventory"},
+                {"item": "Current Liabilities", "value": "$28.4B", "notes": "Accounts payable, short-term debt"},
+                {"item": "NNWC Value", "value": "$33.8B", "notes": "Conservative liquidation estimate"},
+            ],
+            "liquidity_metrics": [
+                {"metric": "Current Ratio", "current": "2.19", "industry_avg": "1.65", "benchmark": "1.50", "status": "PASS"},
+                {"metric": "Quick Ratio", "current": "1.82", "industry_avg": "1.25", "benchmark": "1.00", "status": "PASS"},
+                {"metric": "Cash Ratio", "current": "0.95", "industry_avg": "0.55", "benchmark": "0.30", "status": "PASS"},
+            ],
+            "recession_performance": [
+                {"period": "2008-2009 GFC", "start": "-28.5%", "trough": "-61.2%", "recovery": "18 months", "outperform": True},
+                {"period": "2020 COVID", "start": "-12.3%", "trough": "-25.8%", "recovery": "4 months", "outperform": True},
+                {"period": "2022 Tech Selloff", "start": "-18.2%", "trough": "-32.5%", "recovery": "8 months", "outperform": True},
+            ],
+            "management_events": [
+                {"date": "2023-01-15", "event": "CEO Succession", "position": "Chief Executive Officer", "notes": "Smooth transition, internal candidate"},
+                {"date": "2022-06-30", "event": "CFO Change", "position": "Chief Financial Officer", "notes": "Promoted from VP Finance"},
+            ],
+            "return_metrics": [
+                {"year": 2023, "roe": 22.5, "roa": 16.2, "roic": 18.3, "wacc": 6.2},
+                {"year": 2022, "roe": 21.8, "roa": 15.9, "roic": 17.8, "wacc": 5.8},
+                {"year": 2021, "roe": 21.2, "roa": 15.5, "roic": 17.2, "wacc": 5.2},
             ],
             "peers": [
                 {"name": "Microsoft", "pe": "32.1", "pb": "11.2", "roe": "45.2%", "de": "0.42", "div_yield": "0.8%", "eps_growth": "11.2%", "rating": "BUY"},
                 {"name": "Google", "pe": "24.5", "pb": "6.8", "roe": "19.8%", "de": "0.08", "div_yield": "0.0%", "eps_growth": "8.5%", "rating": "BUY"},
+                {"name": "Amazon", "pe": "40.2", "pb": "3.2", "roe": "8.5%", "de": "0.95", "div_yield": "0.0%", "eps_growth": "15.3%", "rating": "HOLD"},
+                {"name": "Meta", "pe": "28.5", "pb": "8.9", "roe": "12.4%", "de": "0.15", "div_yield": "0.0%", "eps_growth": "12.8%", "rating": "BUY"},
+                {"name": "Nvidia", "pe": "48.3", "pb": "15.2", "roe": "62.1%", "de": "0.22", "div_yield": "0.1%", "eps_growth": "89.5%", "rating": "BUY"},
             ],
             "graham_components": {
                 "EPS (normalized)": "$6.05",
                 "Growth Rate": "10.2%",
                 "Risk-Free Rate": "4.5%",
-                "Beta": "0.95",
+                "Quality Score": "82/100",
                 "IV Formula": "$220.50",
             },
+            "alternative_valuations": [
+                {"method": "Graham Number", "iv": "$185.32", "mos": "-5.2%", "notes": "Conservative floor valuation"},
+                {"method": "NNWC Value", "iv": "$28.50", "mos": "-85.4%", "notes": "Per share, deep value metric"},
+                {"method": "Liquidation Value", "iv": "$42.18", "mos": "-78.4%", "notes": "Most conservative estimate"},
+                {"method": "P/E Adjusted", "iv": "$212.50", "mos": "+8.8%", "notes": "Sector-adjusted multiple"},
+            ],
         }
 
     @staticmethod
