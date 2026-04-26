@@ -17,6 +17,8 @@ from .watchlist_panel import WatchlistPanel
 from .analyzer_panel import AnalyzerPanel
 from .journal_panel import TradingJournalPanel
 from .thesis_panel import ThesisPanel
+from .backtest_panel import BacktestPanel
+from .screener_panel import ScreenerPanel
 
 __all__ = [
     "DashboardPanel",
@@ -24,4 +26,6 @@ __all__ = [
     "AnalyzerPanel",
     "TradingJournalPanel",
     "ThesisPanel",
+    "BacktestPanel",
+    "ScreenerPanel",
 ]
