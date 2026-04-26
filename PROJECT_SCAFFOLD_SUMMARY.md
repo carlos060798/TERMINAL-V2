@@ -233,3 +233,36 @@ The project is now ready for **Phase 1: Cimientos** development.
 ---
 
 **Questions?** See CLAUDE.md or README.md
+
+---
+
+## Phase 3 UI Widgets - Complete ✓
+
+### Created: 2026-04-25
+
+**8 Reusable Widgets** (1,807 lines, 90+ methods):
+1. **MetricCard** - KPI display (value, change %, color-coded)
+2. **ChartWidget** - Candlestick chart (OHLCV, indicators)
+3. **DataTable** - Sortable/filterable table
+4. **TickerSearch** - Autocomplete with fuzzy matching
+5. **AlertBanner** - Notification (info/warning/error/success)
+6. **AIChatWidget** - Chat panel with history
+7. **HeatmapWidget** - Sector heatmap (Plotly)
+8. **EquityCurveWidget** - Equity curve + drawdown
+
+**Test Coverage**: 4 test files, 40+ test cases
+- test_metric_card.py
+- test_data_table.py
+- test_chart_widget.py
+- test_ticker_search.py
+
+**Key Features**:
+- Bloomberg dark theme (#1E1E1E, #00D26A, #FF3B30)
+- PyQt signals for parent integration
+- Graceful error handling
+- Performance optimized
+- Fully documented with README
+
+**Next Steps**:
+- Phase 3: Integrate widgets into main_window.py panels
+- Phase 4+: Wire application use cases to widget signals
