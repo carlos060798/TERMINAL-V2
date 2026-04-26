@@ -159,3 +159,59 @@ class Colors:
         """
         r, g, b = Colors.hex_to_rgb(hex_color)
         return f"rgba({r}, {g}, {b}, {alpha})"
+
+
+class Fonts:
+    """Font settings for Bloomberg dark theme."""
+
+    # ============================================================================
+    # FONT FAMILIES
+    # ============================================================================
+    MONOSPACE = "JetBrains Mono"        # Monospace font for numbers/data
+    SANS_SERIF = "Inter"                # Sans-serif for UI text
+    FALLBACK = "Courier New"            # Fallback monospace
+
+    # ============================================================================
+    # FONT SIZES (pt)
+    # ============================================================================
+    SIZE_TINY = 10
+    SIZE_SMALL = 11
+    SIZE_BASE = 13                      # Default terminal size (dense)
+    SIZE_MEDIUM = 14
+    SIZE_LARGE = 16
+    SIZE_TITLE = 18
+    SIZE_HEADING = 20
+
+    # ============================================================================
+    # FONT WEIGHTS
+    # ============================================================================
+    WEIGHT_NORMAL = 400
+    WEIGHT_MEDIUM = 500
+    WEIGHT_SEMIBOLD = 600
+    WEIGHT_BOLD = 700
+
+    @staticmethod
+    def get_font(family: str = SANS_SERIF, size: int = SIZE_BASE, bold: bool = False) -> str:
+        """Get a CSS font declaration.
+
+        Args:
+            family: Font family name
+            size: Font size in points
+            bold: Whether to use bold weight
+
+        Returns:
+            str: CSS font declaration
+        """
+        weight = Fonts.WEIGHT_BOLD if bold else Fonts.WEIGHT_NORMAL
+        return f"font-family: {family}; font-size: {size}pt; font-weight: {weight};"
+
+    @staticmethod
+    def monospace(size: int = SIZE_BASE) -> str:
+        """Get monospace font CSS (for data/numbers)."""
+        return f"font-family: {Fonts.MONOSPACE}; font-size: {size}pt;"
+
+    @staticmethod
+    def sans_serif(size: int = SIZE_BASE, bold: bool = False) -> str:
+        """Get sans-serif font CSS (for UI)."""
+        weight = Fonts.WEIGHT_BOLD if bold else Fonts.WEIGHT_NORMAL
+        return f"font-family: {Fonts.SANS_SERIF}; font-size: {size}pt; font-weight: {weight};"
